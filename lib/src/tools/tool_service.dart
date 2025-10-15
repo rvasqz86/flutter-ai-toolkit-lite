@@ -1,12 +1,15 @@
 
-
-import 'package:rads_consult_llm/tools/tool.dart';
-
+import 'package:flutter_ai_toolkit/src/tools/tool.dart';
+/// ToolService interface
 abstract class ToolService {
+
+  /// Executes a tool with the given name and arguments.
   Future<dynamic> executeTool(String toolName, Map<String, dynamic> args);
 
+  /// Retrieves a list of available tools.
   Future<List<GenericTool>> getAvailableTools();
 
+  /// Executes a list of tool calls.
   Future<List<Map<String, dynamic>>> executeToolCalls(List<dynamic> toolCalls) async {
     final results = <Map<String, dynamic>>[];
     for (final toolCall in toolCalls) {
