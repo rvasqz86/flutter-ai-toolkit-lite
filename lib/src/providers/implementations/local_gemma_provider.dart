@@ -48,7 +48,10 @@ class LocalGemmaProvider extends LlmProvider with ChangeNotifier {
     this.temperature = 0.8,
     this.topK = 40,
     this.tokenBuffer = 256,
-  });
+  })  : assert(temperature >= 0.0 && temperature <= 1.0,
+            'temperature must be between 0.0 and 1.0'),
+        assert(topK > 0, 'topK must be greater than 0'),
+        assert(tokenBuffer > 0, 'tokenBuffer must be greater than 0');
 
   @override
   Stream<String> generateStream(
@@ -84,15 +87,22 @@ class LocalGemmaProvider extends LlmProvider with ChangeNotifier {
   }
 
   /// Dispose the provider and clean up resources
+  ///
+  /// Note: dispose() must be synchronous per ChangeNotifier contract, but stopGeneration()
+  /// is async. We use fire-and-forget here - the async cleanup will complete eventually,
+  /// but may not be immediate. This is acceptable as the native resources will eventually
+  /// be cleaned up by the async operation, even after the Dart object is disposed.
   @override
   void dispose() {
-    // Properly dispose the chat session before nulling
     if (_chat != null) {
-      _chat!.stopGeneration().catchError((e) {
+      // Fire-and-forget: stopGeneration is async but dispose must be sync.
+      // Resources may remain temporarily active but will clean up eventually.
+      unawaited(_chat!.stopGeneration().catchError((e) {
         debugPrint('Error stopping generation during dispose: $e');
-      });
+        return Future.value();
+      }));
+      _chat = null;
     }
-    _chat = null;
     super.dispose();
   }
 
