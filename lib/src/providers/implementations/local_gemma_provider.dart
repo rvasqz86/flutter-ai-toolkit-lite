@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_gemma/core/chat.dart';
@@ -22,13 +23,32 @@ class LocalGemmaProvider extends LlmProvider with ChangeNotifier {
   /// System prompt
   final String systemPrompt;
 
+  /// Temperature for response generation (0.0 to 1.0)
+  final double temperature;
+
+  /// Top-K sampling parameter
+  final int topK;
+
+  /// Token buffer for context management
+  final int tokenBuffer;
+
   final List<ChatMessage> _history = [];
 
   /// Persistent chat session
   InferenceChat? _chat;
 
+  /// Random number generator for seed variation
+  static final _random = Random();
+
   /// Constructor
-  LocalGemmaProvider(this.inferenceModel, this.systemPrompt, this.toolService);
+  LocalGemmaProvider(
+    this.inferenceModel,
+    this.systemPrompt,
+    this.toolService, {
+    this.temperature = 0.8,
+    this.topK = 40,
+    this.tokenBuffer = 256,
+  });
 
   @override
   Stream<String> generateStream(
@@ -49,15 +69,29 @@ class LocalGemmaProvider extends LlmProvider with ChangeNotifier {
   }
 
   /// Clears the chat history and resets the chat session
-  void clearHistory() {
+  Future<void> clearHistory() async {
     _history.clear();
-    _chat = null; // Reset the chat session
+    // Properly dispose the chat session before nulling
+    if (_chat != null) {
+      try {
+        await _chat!.stopGeneration();
+      } catch (e) {
+        debugPrint('Error stopping generation during clearHistory: $e');
+      }
+    }
+    _chat = null;
     notifyListeners();
   }
 
   /// Dispose the provider and clean up resources
   @override
   void dispose() {
+    // Properly dispose the chat session before nulling
+    if (_chat != null) {
+      _chat!.stopGeneration().catchError((e) {
+        debugPrint('Error stopping generation during dispose: $e');
+      });
+    }
     _chat = null;
     super.dispose();
   }
@@ -88,20 +122,24 @@ class LocalGemmaProvider extends LlmProvider with ChangeNotifier {
     // This is necessary because the native session doesn't retain state after getResponseAsync()
     debugPrint('LocalGemmaProvider: Creating fresh chat session with full history replay');
     _chat = await inferenceModel.createChat(
-        temperature: 0.8,
-        randomSeed: DateTime.now().millisecondsSinceEpoch % 100000,  // Use varying seed
-        topK: 40,
-        tokenBuffer: 256,
+        temperature: temperature,
+        randomSeed: _random.nextInt(100000),  // Use Random for better entropy
+        topK: topK,
+        tokenBuffer: tokenBuffer,
     );
 
-    // Replay full conversation history from _history
-    debugPrint('LocalGemmaProvider: Replaying ${_history.length} messages from history');
+    // Calculate how many messages to replay (exclude current user message if already in history)
+    // The current user message was added to _history in sendMessageStream before calling this method
+    final messagesToReplay = updateHistory ? _history.length - 1 : _history.length;
+    debugPrint('LocalGemmaProvider: Replaying $messagesToReplay messages from history');
 
     // Add system prompt first
     await _chat!.addQueryChunk(Message(text: systemPrompt, isUser: false));
 
-    // Replay all previous messages (both user and assistant)
-    for (final msg in _history) {
+    // Replay previous messages (both user and assistant), but exclude the current user message
+    // that was just added to _history in sendMessageStream to avoid duplication
+    for (var i = 0; i < messagesToReplay; i++) {
+      final msg = _history[i];
       if (msg.origin == MessageOrigin.user) {
         await _chat!.addQueryChunk(Message(text: msg.text, isUser: true));
       } else if (msg.origin == MessageOrigin.llm) {
@@ -109,7 +147,7 @@ class LocalGemmaProvider extends LlmProvider with ChangeNotifier {
       }
     }
 
-    // Add the current user message
+    // Add the current user message (prompt parameter)
     debugPrint('LocalGemmaProvider: Adding current user message: $prompt');
     await _chat!.addQueryChunk(Message(text: prompt, isUser: true));
 
