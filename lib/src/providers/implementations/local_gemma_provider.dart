@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter_gemma/core/chat.dart';
 import 'package:flutter_gemma/core/message.dart';
 import 'package:flutter_gemma/core/model_response.dart';
 import 'package:flutter_gemma/flutter_gemma_interface.dart';
@@ -23,6 +24,9 @@ class LocalGemmaProvider extends LlmProvider with ChangeNotifier {
 
   final List<ChatMessage> _history = [];
 
+  /// Persistent chat session
+  InferenceChat? _chat;
+
   /// Constructor
   LocalGemmaProvider(this.inferenceModel, this.systemPrompt, this.toolService);
 
@@ -42,6 +46,20 @@ class LocalGemmaProvider extends LlmProvider with ChangeNotifier {
     _history.clear();
     _history.addAll(history);
     notifyListeners();
+  }
+
+  /// Clears the chat history and resets the chat session
+  void clearHistory() {
+    _history.clear();
+    _chat = null; // Reset the chat session
+    notifyListeners();
+  }
+
+  /// Dispose the provider and clean up resources
+  @override
+  void dispose() {
+    _chat = null;
+    super.dispose();
   }
 
   @override
@@ -66,13 +84,37 @@ class LocalGemmaProvider extends LlmProvider with ChangeNotifier {
   }
 
   Stream<String> _streamResponse(String prompt, {required bool updateHistory}) async* {
-    var chat = await inferenceModel.createChat();
+    // ALWAYS recreate chat session to ensure full history context
+    // This is necessary because the native session doesn't retain state after getResponseAsync()
+    debugPrint('LocalGemmaProvider: Creating fresh chat session with full history replay');
+    _chat = await inferenceModel.createChat(
+        temperature: 0.8,
+        randomSeed: DateTime.now().millisecondsSinceEpoch % 100000,  // Use varying seed
+        topK: 40,
+        tokenBuffer: 256,
+    );
 
-    chat.addQueryChunk(Message(text: systemPrompt, isUser: false));
-    chat.addQueryChunk(Message(text: prompt, isUser: true));
+    // Replay full conversation history from _history
+    debugPrint('LocalGemmaProvider: Replaying ${_history.length} messages from history');
+
+    // Add system prompt first
+    await _chat!.addQueryChunk(Message(text: systemPrompt, isUser: false));
+
+    // Replay all previous messages (both user and assistant)
+    for (final msg in _history) {
+      if (msg.origin == MessageOrigin.user) {
+        await _chat!.addQueryChunk(Message(text: msg.text, isUser: true));
+      } else if (msg.origin == MessageOrigin.llm) {
+        await _chat!.addQueryChunk(Message(text: msg.text, isUser: false));
+      }
+    }
+
+    // Add the current user message
+    debugPrint('LocalGemmaProvider: Adding current user message: $prompt');
+    await _chat!.addQueryChunk(Message(text: prompt, isUser: true));
 
     StreamController<String> controller = StreamController();
-    chat.generateChatResponseAsync().listen(
+    _chat!.generateChatResponseAsync().listen(
           (ModelResponse response) {
         if (response is TextResponse) {
           controller.add(response.token);
@@ -91,9 +133,11 @@ class LocalGemmaProvider extends LlmProvider with ChangeNotifier {
       },
       onDone: () {
         debugPrint('Chat stream closed');
+        controller.close();
       },
       onError: (error) {
         debugPrint('Chat error: $error');
+        controller.close();
       },
     );
 
