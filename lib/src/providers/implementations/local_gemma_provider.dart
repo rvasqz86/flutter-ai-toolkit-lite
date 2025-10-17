@@ -10,6 +10,7 @@ import '../../tools/tool_service.dart';
 import '../interface/attachments.dart';
 import '../interface/chat_message.dart';
 import '../interface/llm_provider.dart';
+import '../interface/message_origin.dart';
 
 
 /// Provider to use a local llm
