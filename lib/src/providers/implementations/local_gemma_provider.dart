@@ -152,9 +152,9 @@ class LocalGemmaProvider extends LlmProvider with ChangeNotifier {
     for (var i = 0; i < messagesToReplay; i++) {
       final msg = _history[i];
       if (msg.origin == MessageOrigin.user) {
-        await _chat!.addQueryChunk(Message(text: msg.text, isUser: true));
+        await _chat!.addQueryChunk(Message(text: msg.text ?? '', isUser: true));
       } else if (msg.origin == MessageOrigin.llm) {
-        await _chat!.addQueryChunk(Message(text: msg.text, isUser: false));
+        await _chat!.addQueryChunk(Message(text: msg.text ?? '', isUser: false));
       }
     }
 
